@@ -21,232 +21,267 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - name: Checkout repository
+      - name: Check out Waterstrap repository
         uses: actions/checkout@v4
 
-      - name: Download Bloxstrap source
+      - name: Download pinned Bloxstrap source
         shell: pwsh
         run: |
-          git clone --recurse-submodules https://github.com/bloxstraplabs/bloxstrap.git upstream
+          $ErrorActionPreference = "Stop"
+          $upstreamCommit = "02db76006741f039b79ac7547b8054d7f3ccfc05"
 
+          git clone https://github.com/bloxstraplabs/bloxstrap.git upstream
           if ($LASTEXITCODE -ne 0) {
-            throw "Failed to download Bloxstrap source."
+            throw "Failed to clone the upstream source repository."
+          }
+
+          git -C upstream checkout --detach $upstreamCommit
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to check out the pinned upstream commit."
           }
 
           git -C upstream submodule update --init --recursive
-
           if ($LASTEXITCODE -ne 0) {
-            throw "Failed to initialize Git submodules."
+            throw "Failed to initialize the required WPF UI submodule."
           }
 
-          $commit = git -C upstream rev-parse HEAD
-          "UPSTREAM_COMMIT=$commit" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          $actualCommit = (git -C upstream rev-parse HEAD).Trim()
+          "UPSTREAM_COMMIT=$actualCommit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Building upstream commit $actualCommit"
 
       - name: Set Waterstrap application identity
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $file = "upstream/Bloxstrap/App.xaml.cs"
-          $source = Get-Content $file -Raw
 
-          $source = $source.Replace(
-            'ProjectName = "Bloxstrap";',
-            'ProjectName = "Waterstrap";'
-          )
+          if (-not (Test-Path -LiteralPath $file)) {
+            throw "App.xaml.cs was not found in the pinned source."
+          }
 
-          $source = $source.Replace(
-            'ProjectName = "Bloxstrap-QA";',
-            'ProjectName = "Waterstrap-QA";'
-          )
+          $source = Get-Content -LiteralPath $file -Raw
 
-          $source = $source.Replace(
-            'ProjectOwner = "Bloxstrap";',
-            'ProjectOwner = "Waterstrap";'
-          )
+          $replacements = [ordered]@{
+            'ProjectName = "Bloxstrap-QA";' = 'ProjectName = "Waterstrap-QA";'
+            'ProjectName = "Bloxstrap";' = 'ProjectName = "Waterstrap";'
+            'ProjectOwner = "Bloxstrap";' = 'ProjectOwner = "Waterstrap";'
+            'ProjectRepository = "bloxstraplabs/bloxstrap";' = 'ProjectRepository = "acepilot982-collab/NovaStraps";'
+            'ProjectDownloadLink = "https://bloxstraplabs.com";' = 'ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";'
+            'ProjectHelpLink = "https://bloxstraplabs.com/wiki/help/";' = 'ProjectHelpLink = "https://github.com/acepilot982-collab/NovaStraps";'
+            'ProjectSupportLink = "https://github.com/bloxstraplabs/bloxstrap/issues/new";' = 'ProjectSupportLink = "https://github.com/acepilot982-collab/NovaStraps/issues/new";'
+          }
 
-          $source = $source.Replace(
-            'ProjectRepository = "bloxstraplabs/bloxstrap";',
-            'ProjectRepository = "acepilot982-collab/NovaStraps";'
-          )
+          foreach ($pair in $replacements.GetEnumerator()) {
+            if (-not $source.Contains($pair.Key)) {
+              throw "Expected source identity line was not found: $($pair.Key)"
+            }
 
-          $source = $source.Replace(
-            'ProjectDownloadLink = "https://bloxstraplabs.com";',
+            $source = $source.Replace($pair.Key, $pair.Value)
+          }
+
+          Set-Content -LiteralPath $file -Value $source -Encoding utf8
+
+          $check = Get-Content -LiteralPath $file -Raw
+
+          $required = @(
+            'ProjectName = "Waterstrap";',
+            'ProjectRepository = "acepilot982-collab/NovaStraps";',
             'ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";'
           )
 
-          $source = $source.Replace(
-            'ProjectHelpLink = "https://bloxstraplabs.com/wiki/help/";',
-            'ProjectHelpLink = "https://github.com/acepilot982-collab/NovaStraps/issues";'
-          )
-
-          $source = $source.Replace(
-            'ProjectSupportLink = "https://github.com/bloxstraplabs/bloxstrap/issues/new";',
-            'ProjectSupportLink = "https://github.com/acepilot982-collab/NovaStraps/issues/new/choose";'
-          )
-
-          Set-Content -Path $file -Value $source -Encoding utf8
-
-          $check = Get-Content $file -Raw
-
-          if ($check -notmatch 'ProjectName = "Waterstrap";') {
-            throw "Failed to update ProjectName."
+          foreach ($line in $required) {
+            if (-not $check.Contains($line)) {
+              throw "Application identity validation failed: $line"
+            }
           }
 
-          if ($check -notmatch 'ProjectDownloadLink = "https://github\.com/acepilot982-collab/NovaStraps/releases";') {
-            throw "ProjectDownloadLink was not updated correctly."
+      - name: Rename displayed resource values only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = "upstream/Bloxstrap"
+          $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter "*.resx")
+
+          if ($files.Count -eq 0) {
+            throw "No RESX resource files were found."
           }
 
-      - name: Replace visible branding in resource files
-        shell: pwsh
-        run: |
-          $root = "upstream/Bloxstrap"
+          foreach ($file in $files) {
+            $document = New-Object System.Xml.XmlDocument
+            $document.PreserveWhitespace = $true
+            $document.Load($file.FullName)
 
-          Get-ChildItem $root -Recurse -File -Filter "*.resx" |
-            ForEach-Object {
-              $file = $_.FullName
-              $content = Get-Content $file -Raw
-
-              $content = [regex]::Replace(
-                $content,
-                '(?<=<value>)[^<]*Bloxstrap[^<]*(?=</value>)',
-                [System.Text.RegularExpressions.MatchEvaluator]{
-                  param($match)
-                  return [regex]::Replace(
-                    $match.Value,
-                    '(?i)Bloxstrap',
-                    'Waterstrap'
-                  )
-                }
-              )
-
-              Set-Content -Path $file -Value $content -Encoding utf8
-            }
-
-      - name: Replace visible branding in XAML
-        shell: pwsh
-        run: |
-          $root = "upstream/Bloxstrap"
-
-          Get-ChildItem $root -Recurse -File -Filter "*.xaml" |
-            ForEach-Object {
-              $file = $_.FullName
-              $content = Get-Content $file -Raw
-
-              # Replace branding only in common user-facing attributes.
-              $pattern = '(?i)(\b(?:Title|Text|Content|Header|ToolTip|Label|Description|PlaceholderText)\s*=\s*["''])([^"'']*?)Bloxstrap([^"'']*["''])'
-
-              $content = [regex]::Replace(
-                $content,
-                $pattern,
-                [System.Text.RegularExpressions.MatchEvaluator]{
-                  param($match)
-                  return $match.Groups[1].Value +
-                    $match.Groups[2].Value +
-                    'Waterstrap' +
-                    $match.Groups[3].Value
-                }
-              )
-
-              # Replace standalone displayed text without touching namespaces or type names.
-              $content = [regex]::Replace(
-                $content,
-                '(?i)(<(?:TextBlock|Run|Label|Button|MenuItem|Hyperlink)\b[^>]*>)(\s*)Bloxstrap(\s*)(</(?:TextBlock|Run|Label|Button|MenuItem|Hyperlink)>)',
-                '$1$2Waterstrap$3$4'
-              )
-
-              Set-Content -Path $file -Value $content -Encoding utf8
-            }
-
-      - name: Replace visible branding in UI C# strings
-        shell: pwsh
-        run: |
-          $root = "upstream/Bloxstrap/UI"
-
-          if (Test-Path $root) {
-            Get-ChildItem $root -Recurse -File -Filter "*.cs" |
-              ForEach-Object {
-                $file = $_.FullName
-                $content = Get-Content $file -Raw
-
-                # Only change ordinary quoted text containing the brand.
-                # Skip URL strings and avoid editing project identifiers.
-                $content = [regex]::Replace(
-                  $content,
-                  '(["''])([^"''\r\n]*Bloxstrap[^"''\r\n]*)(["''])',
-                  [System.Text.RegularExpressions.MatchEvaluator]{
-                    param($match)
-
-                    $value = $match.Groups[2].Value
-
-                    if ($value -match '(?i)https?://|bloxstraplabs\.com|\.ico|\.dll|\.exe|\.csproj|namespace|using ') {
-                      return $match.Value
-                    }
-
-                    return $match.Groups[1].Value +
-                      ([regex]::Replace($value, '(?i)Bloxstrap', 'Waterstrap')) +
-                      $match.Groups[3].Value
-                  }
-                )
-
-                Set-Content -Path $file -Value $content -Encoding utf8
+            # Change visible resource values only.
+            # Resource keys, names and generated member identifiers stay unchanged.
+            foreach ($entry in $document.SelectNodes("/root/data")) {
+              if ($entry.HasAttribute("type") -or $entry.HasAttribute("mimetype")) {
+                continue
               }
+
+              $valueNode = $entry.SelectSingleNode("./value")
+
+              if ($null -eq $valueNode) {
+                continue
+              }
+
+              $valueText = $valueNode.InnerText
+              $hasBrand = $valueText -match '(?i)Bloxstrap'
+              $containsUrl = $valueText -match '(?i)https?://|bloxstraplabs\.com'
+
+              if ($hasBrand -and -not $containsUrl) {
+                $valueNode.InnerText = [regex]::Replace(
+                  $valueText,
+                  '(?i)Bloxstrap',
+                  'Waterstrap'
+                )
+              }
+            }
+
+            $document.Save($file.FullName)
           }
 
-      - name: Rename main executable assembly
+          Write-Host "Updated displayed resource text without changing resource keys."
+
+      - name: Rename literal XAML display text safely
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $root = "upstream/Bloxstrap"
+          $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter "*.xaml")
+
+          $pattern = '(?i)(\b(?:Title|Text|Content|Header|ToolTip|Label|Description|PlaceholderText)\s*=\s*)(["''])(.*?)\2'
+
+          foreach ($file in $files) {
+            $content = Get-Content -LiteralPath $file.FullName -Raw
+
+            $evaluator = [System.Text.RegularExpressions.MatchEvaluator]{
+              param($match)
+
+              $value = $match.Groups[3].Value
+              $hasBrand = $value -match '(?i)Bloxstrap'
+              $hasMarkup = ($value.Contains('{') -or $value.Contains('}'))
+              $looksLikeResource = $value -match '(?i)Strings\.|StaticResource|DynamicResource|\bBinding\b'
+
+              # Preserve markup extensions and resource references exactly.
+              if (-not $hasBrand -or $hasMarkup -or $looksLikeResource) {
+                return $match.Value
+              }
+
+              return $match.Groups[1].Value +
+                $match.Groups[2].Value +
+                [regex]::Replace($value, '(?i)Bloxstrap', 'Waterstrap') +
+                $match.Groups[2].Value
+            }
+
+            $content = [regex]::Replace($content, $pattern, $evaluator)
+
+            Set-Content -LiteralPath $file.FullName -Value $content -Encoding utf8
+          }
+
+          Write-Host "Updated literal XAML text while preserving resource references."
+
+      - name: Set executable name and preserve WPF namespaces
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
           $file = "upstream/Bloxstrap/Bloxstrap.csproj"
 
-          if (-not (Test-Path $file)) {
-            throw "Could not find Bloxstrap.csproj."
+          if (-not (Test-Path -LiteralPath $file)) {
+            throw "Bloxstrap.csproj was not found."
           }
 
-          [xml]$project = Get-Content $file -Raw
+          $projectText = Get-Content -LiteralPath $file -Raw
+          $singleLine = [System.Text.RegularExpressions.RegexOptions]::Singleline
 
-          $assembly = $project.SelectSingleNode(
+          $assemblyPattern = [regex]::new('<AssemblyName>.*?</AssemblyName>', $singleLine)
+
+          if ($assemblyPattern.IsMatch($projectText)) {
+            $projectText = $assemblyPattern.Replace(
+              $projectText,
+              '<AssemblyName>Waterstrap</AssemblyName>',
+              1
+            )
+          }
+
+          $rootPattern = [regex]::new('<RootNamespace>.*?</RootNamespace>', $singleLine)
+
+          if ($rootPattern.IsMatch($projectText)) {
+            $projectText = $rootPattern.Replace(
+              $projectText,
+              '<RootNamespace>Bloxstrap</RootNamespace>',
+              1
+            )
+          }
+
+          $missingProperties = @()
+
+          if (-not $assemblyPattern.IsMatch($projectText)) {
+            $missingProperties += '    <AssemblyName>Waterstrap</AssemblyName>'
+          }
+
+          if (-not $rootPattern.IsMatch($projectText)) {
+            $missingProperties += '    <RootNamespace>Bloxstrap</RootNamespace>'
+          }
+
+          if ($missingProperties.Count -gt 0) {
+            $groupPattern = [regex]::new('<PropertyGroup\b[^>]*>')
+            $groupMatch = $groupPattern.Match($projectText)
+
+            if (-not $groupMatch.Success) {
+              throw "Could not find a PropertyGroup in Bloxstrap.csproj."
+            }
+
+            $insertion = $groupMatch.Value +
+              [Environment]::NewLine +
+              ($missingProperties -join [Environment]::NewLine)
+
+            $projectText = $groupPattern.Replace($projectText, $insertion, 1)
+          }
+
+          Set-Content -LiteralPath $file -Value $projectText -Encoding utf8
+
+          [xml]$projectCheck = Get-Content -LiteralPath $file -Raw
+
+          $assemblyCheck = $projectCheck.SelectSingleNode(
             "//*[local-name()='AssemblyName']"
           )
 
-          if ($null -eq $assembly) {
-            $group = $project.SelectSingleNode(
-              "/*[local-name()='Project']/*[local-name()='PropertyGroup']"
-            )
+          $rootCheck = $projectCheck.SelectSingleNode(
+            "//*[local-name()='RootNamespace']"
+          )
 
-            if ($null -eq $group) {
-              throw "Could not find a project PropertyGroup."
-            }
-
-            $assembly = $project.CreateElement(
-              "AssemblyName",
-              $project.DocumentElement.NamespaceURI
-            )
-
-            [void]$group.AppendChild($assembly)
+          if ($null -eq $assemblyCheck -or $assemblyCheck.InnerText -ne "Waterstrap") {
+            throw "AssemblyName validation failed."
           }
 
-          $assembly.InnerText = "Waterstrap"
-          $project.Save((Resolve-Path $file).Path)
-
-          Write-Host "Main assembly name set to Waterstrap."
+          if ($null -eq $rootCheck -or $rootCheck.InnerText -ne "Bloxstrap") {
+            throw "RootNamespace validation failed. WPF resource namespaces must stay Bloxstrap."
+          }
 
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "6.0.x"
+          dotnet-version: "6.0.428"
 
       - name: Restore dependencies
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           dotnet restore upstream/Bloxstrap/Bloxstrap.csproj `
             --runtime win-x64 `
-            -p:EnableWindowsTargeting=true
+            -p:EnableWindowsTargeting=true `
+            -p:SelfContained=true
 
           if ($LASTEXITCODE -ne 0) {
             throw "Dependency restore failed."
           }
 
-      - name: Build Waterstrap
+      - name: Publish Waterstrap
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           dotnet publish upstream/Bloxstrap/Bloxstrap.csproj `
             --configuration Release `
             --runtime win-x64 `
@@ -260,34 +295,39 @@ jobs:
             --output published/Waterstrap
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Compilation failed. Expand the build log above this message for the actual compiler error."
+            throw "Publish failed. Read the compiler error above this message."
           }
 
-      - name: Verify build output
+      - name: Verify the executable
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $exe = "published/Waterstrap/Waterstrap.exe"
 
-          if (-not (Test-Path $exe)) {
-            Write-Host "Published files:"
-            Get-ChildItem "published/Waterstrap" -Recurse -ErrorAction SilentlyContinue |
+          if (-not (Test-Path -LiteralPath $exe)) {
+            Write-Host "Publish directory contents:"
+
+            Get-ChildItem -LiteralPath "published/Waterstrap" -Recurse -ErrorAction SilentlyContinue |
               Select-Object FullName, Length |
               Format-Table -AutoSize
 
-            throw "Waterstrap.exe was not generated."
+            throw "Waterstrap.exe was not produced."
           }
 
-          $file = Get-Item $exe
+          $file = Get-Item -LiteralPath $exe
 
           if ($file.Length -lt 1000000) {
-            throw "The executable is unexpectedly small. Check the publish output."
+            throw "Waterstrap.exe is unexpectedly small; check the publish output."
           }
 
-          Write-Host "Build successful."
-          Write-Host "Executable: $($file.FullName)"
-          Write-Host "Size: $([math]::Round($file.Length / 1MB, 2)) MB"
+          if (-not (Test-Path -LiteralPath "upstream/LICENSE")) {
+            throw "The upstream license file is missing."
+          }
 
-      - name: Upload Windows executable
+          Write-Host "Build succeeded: $($file.FullName)"
+          Write-Host "Executable size: $([math]::Round($file.Length / 1MB, 2)) MB"
+
+      - name: Upload Windows executable artifact
         uses: actions/upload-artifact@v4
         with:
           name: Waterstrap-Windows-x64
@@ -295,18 +335,20 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish GitHub Release
-        if: success() && github.event_name == 'workflow_dispatch'
+      - name: Create GitHub release
+        if: github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: waterstrap-build-${{ github.run_number }}
-          name: Waterstrap Build ${{ github.run_number }}
+          tag_name: waterstrap-${{ github.run_number }}-${{ github.run_attempt }}
+          name: Waterstrap Build ${{ github.run_number }} (attempt ${{ github.run_attempt }})
           body: |
             Unofficial Waterstrap Windows x64 build based on Bloxstrap.
-            Upstream commit: ${{ env.UPSTREAM_COMMIT }}
+            Pinned upstream commit: ${{ env.UPSTREAM_COMMIT }}
 
             This community build is not affiliated with Roblox or the original Bloxstrap maintainers.
-            Original license and attribution notices are retained in the source.
-          files: published/Waterstrap/Waterstrap.exe
+            The upstream license is included with this release.
+          files: |
+            published/Waterstrap/Waterstrap.exe
+            upstream/LICENSE
           fail_on_unmatched_files: true
           generate_release_notes: false
