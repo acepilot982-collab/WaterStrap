@@ -21,72 +21,157 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Checkout official Bloxstrap source
+      - name: Download Bloxstrap source and submodules
         shell: pwsh
         run: |
           git clone --recurse-submodules https://github.com/bloxstraplabs/bloxstrap.git upstream
-
           if ($LASTEXITCODE -ne 0) {
-            throw "Failed to download Bloxstrap source and submodules."
+            throw "Failed to clone Bloxstrap."
           }
 
           git -C upstream submodule update --init --recursive
-
           if ($LASTEXITCODE -ne 0) {
-            throw "Failed to initialize source submodules."
+            throw "Failed to initialize submodules."
           }
 
           "UPSTREAM_COMMIT=$(git -C upstream rev-parse HEAD)" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Apply Waterstrap branding
+      - name: Rename application identity
         shell: pwsh
         run: |
           $file = "upstream/Bloxstrap/App.xaml.cs"
-
-          if (-not (Test-Path $file)) {
-            throw "Could not find the Bloxstrap application identity file."
-          }
-
           $source = Get-Content $file -Raw
 
-          $replacements = @{
-            'ProjectName = "Bloxstrap";' = 'ProjectName = "Waterstrap";'
-            'ProjectOwner = "Bloxstrap";' = 'ProjectOwner = "Waterstrap";'
-            'ProjectRepository = "bloxstraplabs/bloxstrap";' = 'ProjectRepository = "acepilot982-collab/NovaStraps";'
-            'ProjectDownloadLink = "https://bloxstraplabs.com";' = 'ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";'
+          $source = $source -replace `
+            'ProjectName = "Bloxstrap";',
+            'ProjectName = "Waterstrap";'
+
+          $source = $source -replace `
+            'ProjectOwner = "Bloxstrap";',
+            'ProjectOwner = "Waterstrap";'
+
+          $source = $source -replace `
+            'ProjectRepository = "bloxstraplabs/bloxstrap";',
+            'ProjectRepository = "acepilot982-collab/NovaStraps";'
+
+          $source = $source -replace `
+            'ProjectDownloadLink = "https://bloxstraplabs\.com";',
+            'ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases"'
+
+          Set-Content $file $source -Encoding utf8
+
+          if (-not (Select-String $file -Pattern 'ProjectName = "Waterstrap"' -Quiet)) {
+            throw "Failed to update the application name."
           }
 
-          foreach ($old in $replacements.Keys) {
-            if ($source.Contains($old)) {
-              $source = $source.Replace($old, $replacements[$old])
-              Write-Host "Updated branding: $old"
+      - name: Replace visible UI branding
+        shell: pwsh
+        run: |
+          $root = "upstream/Bloxstrap"
+
+          # Update displayed text in resource files.
+          Get-ChildItem $root -Recurse -File -Filter "*.resx" |
+            ForEach-Object {
+              $file = $_.FullName
+              $content = Get-Content $file -Raw
+
+              $content = [regex]::Replace(
+                $content,
+                '(?<=<value>)[^<]*Bloxstrap[^<]*(?=</value>)',
+                { param($m) $m.Value -replace '(?i)Bloxstrap', 'Waterstrap' }
+              )
+
+              Set-Content $file $content -Encoding utf8
             }
-            else {
-              Write-Warning "Branding string not found in this upstream version: $old"
+
+          # Update user-visible XAML attributes and literal text.
+          Get-ChildItem $root -Recurse -File -Filter "*.xaml" |
+            ForEach-Object {
+              $file = $_.FullName
+              $content = Get-Content $file -Raw
+
+              $content = [regex]::Replace(
+                $content,
+                '(?i)(\b(?:Title|Text|Content|Header|ToolTip|Label|Description|PlaceholderText)\s*=\s*["''][^"'']*)Bloxstrap([^"'']*["''])',
+                { param($m) $m.Groups[1].Value + 'Waterstrap' + $m.Groups[2].Value }
+              )
+
+              # Replace standalone visible text, not XML namespaces or type names.
+              $content = [regex]::Replace(
+                $content,
+                '(?i)(<(?:TextBlock|Run|Label|Button|MenuItem|Hyperlink)\b[^>]*>)(\s*)Bloxstrap(\s*)(</(?:TextBlock|Run|Label|Button|MenuItem|Hyperlink)>)',
+                '$1$2Waterstrap$3$4'
+              )
+
+              Set-Content $file $content -Encoding utf8
             }
+
+          # Replace branding inside ordinary C# string literals.
+          # URLs are excluded so links and namespaces are not accidentally changed.
+          Get-ChildItem $root -Recurse -File -Filter "*.cs" |
+            ForEach-Object {
+              $file = $_.FullName
+              $content = Get-Content $file -Raw
+
+              $content = [regex]::Replace(
+                $content,
+                '(["''])([^"''\r\n]*Bloxstrap[^"''\r\n]*)(["''])',
+                {
+                  param($m)
+                  $value = $m.Groups[2].Value
+
+                  if ($value -match '(?i)https?://|bloxstraplabs\.com') {
+                    return $m.Value
+                  }
+
+                  return $m.Groups[1].Value +
+                    ($value -replace '(?i)Bloxstrap', 'Waterstrap') +
+                    $m.Groups[3].Value
+                }
+              )
+
+              Set-Content $file $content -Encoding utf8
+            }
+
+          Write-Host "Visible branding replacement completed."
+
+      - name: Set executable assembly name
+        shell: pwsh
+        run: |
+          $file = "upstream/Bloxstrap/Bloxstrap.csproj"
+          [xml]$project = Get-Content $file -Raw
+
+          $ns = New-Object System.Xml.XmlNamespaceManager($project.NameTable)
+          $ns.AddNamespace("msb", "http://schemas.microsoft.com/developer/msbuild/2003")
+
+          $assembly = $project.SelectSingleNode(
+            "//*[local-name()='AssemblyName']"
+          )
+
+          if ($null -eq $assembly) {
+            $group = $project.SelectSingleNode(
+              "/*[local-name()='Project']/*[local-name()='PropertyGroup']"
+            )
+
+            if ($null -eq $group) {
+              throw "Could not find the project property group."
+            }
+
+            $assembly = $project.CreateElement("AssemblyName")
+            [void]$group.AppendChild($assembly)
           }
 
-          Set-Content -Path $file -Value $source -Encoding utf8
-
-          if (-not (Select-String -Path $file -Pattern 'ProjectName = "Waterstrap"' -Quiet)) {
-            throw "Failed to set the Waterstrap application name."
-          }
+          $assembly.InnerText = "Waterstrap"
+          $project.Save((Resolve-Path $file).Path)
 
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: |
-            6.0.x
-
-      - name: Show build environment
-        shell: pwsh
-        run: |
-          dotnet --info
-          Write-Host "Upstream commit: $env:UPSTREAM_COMMIT"
+          dotnet-version: "6.0.x"
 
       - name: Restore dependencies
         shell: pwsh
@@ -115,40 +200,29 @@ jobs:
             --output published/Waterstrap
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Waterstrap compilation failed. Check the compiler errors above."
+            throw "Compilation failed. Check the build log."
           }
 
-      - name: Rename final executable
+      - name: Verify executable
         shell: pwsh
         run: |
-          $sourceExe = "published/Waterstrap/Bloxstrap.exe"
-          $targetExe = "published/Waterstrap/Waterstrap.exe"
+          $exe = "published/Waterstrap/Waterstrap.exe"
 
-          if (-not (Test-Path $sourceExe)) {
-            Get-ChildItem "published/Waterstrap" -Recurse |
+          if (-not (Test-Path $exe)) {
+            Get-ChildItem published/Waterstrap -Recurse |
               Select-Object FullName, Length |
               Format-Table -AutoSize
 
-            throw "Expected Bloxstrap.exe was not found after publishing."
+            throw "Waterstrap.exe was not produced."
           }
 
-          if (Test-Path $targetExe) {
-            Remove-Item $targetExe -Force
-          }
-
-          Move-Item $sourceExe $targetExe
-
-          if (-not (Test-Path $targetExe)) {
-            throw "Failed to create Waterstrap.exe."
-          }
-
-          $file = Get-Item $targetExe
+          $file = Get-Item $exe
 
           if ($file.Length -lt 1000000) {
-            throw "The executable is unexpectedly small; refusing to publish."
+            throw "Executable is unexpectedly small."
           }
 
-          Write-Host "Built: $($file.FullName)"
+          Write-Host "Created $($file.FullName)"
           Write-Host "Size: $([math]::Round($file.Length / 1MB, 2)) MB"
 
       - name: Upload Waterstrap executable
@@ -159,20 +233,18 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish GitHub Release
+      - name: Create GitHub Release
         if: success() && github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: waterstrap-build-${{ github.run_number }}
           name: Waterstrap Build ${{ github.run_number }}
           body: |
-            Automated Windows x64 build of Waterstrap.
-
-            Based on the open-source Bloxstrap project.
+            Unofficial Waterstrap Windows x64 build based on Bloxstrap.
             Upstream commit: ${{ env.UPSTREAM_COMMIT }}
 
-            This is an unofficial community build and is not affiliated with or endorsed by Roblox or the original Bloxstrap maintainers.
-            Review the source and build logs before running the executable.
+            This community build is not affiliated with Roblox or the original Bloxstrap maintainers.
+            Original license and attribution notices must be retained.
           files: published/Waterstrap/Waterstrap.exe
           fail_on_unmatched_files: true
           generate_release_notes: false
