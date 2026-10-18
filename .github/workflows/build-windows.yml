@@ -1,4 +1,5 @@
-name: Build Waterstrap from official Bloxstrap source
+
+name: Build Waterstrap
 
 on:
   workflow_dispatch:
@@ -9,44 +10,148 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: waterstrap-build
+  cancel-in-progress: false
+
 jobs:
   build:
+    name: Build Waterstrap for Windows x64
     runs-on: windows-latest
+    timeout-minutes: 30
+
     steps:
-      - name: Check out Waterstrap build configuration
+      - name: Checkout workflow repository
         uses: actions/checkout@v4
 
-      - name: Get the official Bloxstrap source and submodules
+      - name: Checkout official Bloxstrap source
         shell: pwsh
         run: |
           git clone --recurse-submodules https://github.com/bloxstraplabs/bloxstrap.git upstream
-          if ($LASTEXITCODE -ne 0) { throw "Could not clone official Bloxstrap source." }
 
-      - name: Apply Waterstrap application identity
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to download Bloxstrap source and submodules."
+          }
+
+          git -C upstream submodule update --init --recursive
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to initialize source submodules."
+          }
+
+          "UPSTREAM_COMMIT=$(git -C upstream rev-parse HEAD)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Apply Waterstrap branding
         shell: pwsh
         run: |
-          $path = "upstream/Bloxstrap/App.xaml.cs"
-          $source = Get-Content $path -Raw
-          $source = $source.Replace('public const string ProjectName = "Bloxstrap";', 'public const string ProjectName = "Waterstrap";')
-          $source = $source.Replace('public const string ProjectOwner = "Bloxstrap";', 'public const string ProjectOwner = "Waterstrap";')
-          $source = $source.Replace('public const string ProjectRepository = "bloxstraplabs/bloxstrap";', 'public const string ProjectRepository = "acepilot982-collab/NovaStraps";')
-          $source = $source.Replace('public const string ProjectDownloadLink = "https://bloxstraplabs.com";', 'public const string ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";')
-          Set-Content -Path $path -Value $source -Encoding utf8
-          if (-not (Select-String -Path $path -Pattern 'ProjectName = "Waterstrap"' -Quiet)) { throw "Waterstrap name patch did not apply." }
+          $file = "upstream/Bloxstrap/App.xaml.cs"
+
+          if (-not (Test-Path $file)) {
+            throw "Could not find the Bloxstrap application identity file."
+          }
+
+          $source = Get-Content $file -Raw
+
+          $replacements = @{
+            'ProjectName = "Bloxstrap";' = 'ProjectName = "Waterstrap";'
+            'ProjectOwner = "Bloxstrap";' = 'ProjectOwner = "Waterstrap";'
+            'ProjectRepository = "bloxstraplabs/bloxstrap";' = 'ProjectRepository = "acepilot982-collab/NovaStraps";'
+            'ProjectDownloadLink = "https://bloxstraplabs.com";' = 'ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";'
+          }
+
+          foreach ($old in $replacements.Keys) {
+            if ($source.Contains($old)) {
+              $source = $source.Replace($old, $replacements[$old])
+              Write-Host "Updated branding: $old"
+            }
+            else {
+              Write-Warning "Branding string not found in this upstream version: $old"
+            }
+          }
+
+          Set-Content -Path $file -Value $source -Encoding utf8
+
+          if (-not (Select-String -Path $file -Pattern 'ProjectName = "Waterstrap"' -Quiet)) {
+            throw "Failed to set the Waterstrap application name."
+          }
 
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 6.0.x
+          dotnet-version: |
+            6.0.x
 
-      - name: Build Waterstrap x64 executable
+      - name: Show build environment
         shell: pwsh
         run: |
-          dotnet publish upstream/Bloxstrap/Bloxstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableWindowsTargeting=true -p:AssemblyName=Waterstrap --output published/Waterstrap
-          if ($LASTEXITCODE -ne 0) { throw "Waterstrap build failed." }
-          if (-not (Test-Path "published/Waterstrap/Waterstrap.exe")) { throw "Waterstrap.exe was not produced." }
+          dotnet --info
+          Write-Host "Upstream commit: $env:UPSTREAM_COMMIT"
 
-      - name: Upload Waterstrap.exe build artifact
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          dotnet restore upstream/Bloxstrap/Bloxstrap.csproj `
+            --runtime win-x64 `
+            -p:EnableWindowsTargeting=true
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Dependency restore failed."
+          }
+
+      - name: Publish Waterstrap
+        shell: pwsh
+        run: |
+          dotnet publish upstream/Bloxstrap/Bloxstrap.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --no-restore `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableWindowsTargeting=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
+            --output published/Waterstrap
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Waterstrap compilation failed. Check the compiler errors above."
+          }
+
+      - name: Rename final executable
+        shell: pwsh
+        run: |
+          $sourceExe = "published/Waterstrap/Bloxstrap.exe"
+          $targetExe = "published/Waterstrap/Waterstrap.exe"
+
+          if (-not (Test-Path $sourceExe)) {
+            Get-ChildItem "published/Waterstrap" -Recurse |
+              Select-Object FullName, Length |
+              Format-Table -AutoSize
+
+            throw "Expected Bloxstrap.exe was not found after publishing."
+          }
+
+          if (Test-Path $targetExe) {
+            Remove-Item $targetExe -Force
+          }
+
+          Move-Item $sourceExe $targetExe
+
+          if (-not (Test-Path $targetExe)) {
+            throw "Failed to create Waterstrap.exe."
+          }
+
+          $file = Get-Item $targetExe
+
+          if ($file.Length -lt 1000000) {
+            throw "The executable is unexpectedly small; refusing to publish."
+          }
+
+          Write-Host "Built: $($file.FullName)"
+          Write-Host "Size: $([math]::Round($file.Length / 1MB, 2)) MB"
+
+      - name: Upload Waterstrap executable
         uses: actions/upload-artifact@v4
         with:
           name: Waterstrap-Windows-x64
@@ -54,15 +159,20 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish Waterstrap.exe to a GitHub Release
+      - name: Publish GitHub Release
+        if: success() && github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: waterstrap-build-${{ github.run_id }}
+          tag_name: waterstrap-build-${{ github.run_number }}
           name: Waterstrap Build ${{ github.run_number }}
           body: |
-            Waterstrap is an unofficial community build based on the open-source Bloxstrap project.
-            Original project and license notices are retained in the source checkout. This build is not affiliated with or endorsed by Bloxstrap Labs or Roblox.
-            This is an automated, unsigned development build. Review the source and build log before running it.
+            Automated Windows x64 build of Waterstrap.
+
+            Based on the open-source Bloxstrap project.
+            Upstream commit: ${{ env.UPSTREAM_COMMIT }}
+
+            This is an unofficial community build and is not affiliated with or endorsed by Roblox or the original Bloxstrap maintainers.
+            Review the source and build logs before running the executable.
           files: published/Waterstrap/Waterstrap.exe
-          make_latest: true
+          fail_on_unmatched_files: true
           generate_release_notes: false
