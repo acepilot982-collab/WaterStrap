@@ -1,354 +1,133 @@
-
-name: Build Waterstrap
+name: Build WaterStrap macOS DMG
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
+      - "feature/macos-dmg"
     paths:
-      - ".github/workflows/build-waterstrap.yml"
+      - "macos/**"
+      - ".github/workflows/build-macos.yml"
 
 permissions:
   contents: write
 
 concurrency:
-  group: waterstrap-build
+  group: waterstrap-macos-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build Waterstrap for Windows x64
-    runs-on: windows-latest
-    timeout-minutes: 40
+    name: Build ${{ matrix.rid }} DMG
+    runs-on: macos-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [osx-arm64, osx-x64]
+
+    defaults:
+      run:
+        working-directory: macos
 
     steps:
-      - name: Check out Waterstrap repository
+      - name: Check out WaterStrap
         uses: actions/checkout@v4
 
-      - name: Download pinned Bloxstrap source
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $upstreamCommit = "02db76006741f039b79ac7547b8054d7f3ccfc05"
-
-          git clone https://github.com/bloxstraplabs/bloxstrap.git upstream
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to clone the upstream source repository."
-          }
-
-          git -C upstream checkout --detach $upstreamCommit
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to check out the pinned upstream commit."
-          }
-
-          git -C upstream submodule update --init --recursive
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to initialize the required WPF UI submodule."
-          }
-
-          $actualCommit = (git -C upstream rev-parse HEAD).Trim()
-          "UPSTREAM_COMMIT=$actualCommit" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Building upstream commit $actualCommit"
-
-      - name: Set Waterstrap application identity
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $file = "upstream/Bloxstrap/App.xaml.cs"
-
-          if (-not (Test-Path -LiteralPath $file)) {
-            throw "App.xaml.cs was not found in the pinned source."
-          }
-
-          $source = Get-Content -LiteralPath $file -Raw
-
-          $replacements = [ordered]@{
-            'ProjectName = "Bloxstrap-QA";' = 'ProjectName = "Waterstrap-QA";'
-            'ProjectName = "Bloxstrap";' = 'ProjectName = "Waterstrap";'
-            'ProjectOwner = "Bloxstrap";' = 'ProjectOwner = "Waterstrap";'
-            'ProjectRepository = "bloxstraplabs/bloxstrap";' = 'ProjectRepository = "acepilot982-collab/NovaStraps";'
-            'ProjectDownloadLink = "https://bloxstraplabs.com";' = 'ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";'
-            'ProjectHelpLink = "https://bloxstraplabs.com/wiki/help/";' = 'ProjectHelpLink = "https://github.com/acepilot982-collab/NovaStraps";'
-            'ProjectSupportLink = "https://github.com/bloxstraplabs/bloxstrap/issues/new";' = 'ProjectSupportLink = "https://github.com/acepilot982-collab/NovaStraps/issues/new";'
-          }
-
-          foreach ($pair in $replacements.GetEnumerator()) {
-            if (-not $source.Contains($pair.Key)) {
-              throw "Expected source identity line was not found: $($pair.Key)"
-            }
-
-            $source = $source.Replace($pair.Key, $pair.Value)
-          }
-
-          Set-Content -LiteralPath $file -Value $source -Encoding utf8
-
-          $check = Get-Content -LiteralPath $file -Raw
-
-          $required = @(
-            'ProjectName = "Waterstrap";',
-            'ProjectRepository = "acepilot982-collab/NovaStraps";',
-            'ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";'
-          )
-
-          foreach ($line in $required) {
-            if (-not $check.Contains($line)) {
-              throw "Application identity validation failed: $line"
-            }
-          }
-
-      - name: Rename displayed resource values only
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $root = "upstream/Bloxstrap"
-          $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter "*.resx")
-
-          if ($files.Count -eq 0) {
-            throw "No RESX resource files were found."
-          }
-
-          foreach ($file in $files) {
-            $document = New-Object System.Xml.XmlDocument
-            $document.PreserveWhitespace = $true
-            $document.Load($file.FullName)
-
-            # Change visible resource values only.
-            # Resource keys, names and generated member identifiers stay unchanged.
-            foreach ($entry in $document.SelectNodes("/root/data")) {
-              if ($entry.HasAttribute("type") -or $entry.HasAttribute("mimetype")) {
-                continue
-              }
-
-              $valueNode = $entry.SelectSingleNode("./value")
-
-              if ($null -eq $valueNode) {
-                continue
-              }
-
-              $valueText = $valueNode.InnerText
-              $hasBrand = $valueText -match '(?i)Bloxstrap'
-              $containsUrl = $valueText -match '(?i)https?://|bloxstraplabs\.com'
-
-              if ($hasBrand -and -not $containsUrl) {
-                $valueNode.InnerText = [regex]::Replace(
-                  $valueText,
-                  '(?i)Bloxstrap',
-                  'Waterstrap'
-                )
-              }
-            }
-
-            $document.Save($file.FullName)
-          }
-
-          Write-Host "Updated displayed resource text without changing resource keys."
-
-      - name: Rename literal XAML display text safely
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $root = "upstream/Bloxstrap"
-          $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter "*.xaml")
-
-          $pattern = '(?i)(\b(?:Title|Text|Content|Header|ToolTip|Label|Description|PlaceholderText)\s*=\s*)(["''])(.*?)\2'
-
-          foreach ($file in $files) {
-            $content = Get-Content -LiteralPath $file.FullName -Raw
-
-            $evaluator = [System.Text.RegularExpressions.MatchEvaluator]{
-              param($match)
-
-              $value = $match.Groups[3].Value
-              $hasBrand = $value -match '(?i)Bloxstrap'
-              $hasMarkup = ($value.Contains('{') -or $value.Contains('}'))
-              $looksLikeResource = $value -match '(?i)Strings\.|StaticResource|DynamicResource|\bBinding\b'
-
-              # Preserve markup extensions and resource references exactly.
-              if (-not $hasBrand -or $hasMarkup -or $looksLikeResource) {
-                return $match.Value
-              }
-
-              return $match.Groups[1].Value +
-                $match.Groups[2].Value +
-                [regex]::Replace($value, '(?i)Bloxstrap', 'Waterstrap') +
-                $match.Groups[2].Value
-            }
-
-            $content = [regex]::Replace($content, $pattern, $evaluator)
-
-            Set-Content -LiteralPath $file.FullName -Value $content -Encoding utf8
-          }
-
-          Write-Host "Updated literal XAML text while preserving resource references."
-
-      - name: Set executable name and preserve WPF namespaces
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $file = "upstream/Bloxstrap/Bloxstrap.csproj"
-
-          if (-not (Test-Path -LiteralPath $file)) {
-            throw "Bloxstrap.csproj was not found."
-          }
-
-          $projectText = Get-Content -LiteralPath $file -Raw
-          $singleLine = [System.Text.RegularExpressions.RegexOptions]::Singleline
-
-          $assemblyPattern = [regex]::new('<AssemblyName>.*?</AssemblyName>', $singleLine)
-
-          if ($assemblyPattern.IsMatch($projectText)) {
-            $projectText = $assemblyPattern.Replace(
-              $projectText,
-              '<AssemblyName>Waterstrap</AssemblyName>',
-              1
-            )
-          }
-
-          $rootPattern = [regex]::new('<RootNamespace>.*?</RootNamespace>', $singleLine)
-
-          if ($rootPattern.IsMatch($projectText)) {
-            $projectText = $rootPattern.Replace(
-              $projectText,
-              '<RootNamespace>Bloxstrap</RootNamespace>',
-              1
-            )
-          }
-
-          $missingProperties = @()
-
-          if (-not $assemblyPattern.IsMatch($projectText)) {
-            $missingProperties += '    <AssemblyName>Waterstrap</AssemblyName>'
-          }
-
-          if (-not $rootPattern.IsMatch($projectText)) {
-            $missingProperties += '    <RootNamespace>Bloxstrap</RootNamespace>'
-          }
-
-          if ($missingProperties.Count -gt 0) {
-            $groupPattern = [regex]::new('<PropertyGroup\b[^>]*>')
-            $groupMatch = $groupPattern.Match($projectText)
-
-            if (-not $groupMatch.Success) {
-              throw "Could not find a PropertyGroup in Bloxstrap.csproj."
-            }
-
-            $insertion = $groupMatch.Value +
-              [Environment]::NewLine +
-              ($missingProperties -join [Environment]::NewLine)
-
-            $projectText = $groupPattern.Replace($projectText, $insertion, 1)
-          }
-
-          Set-Content -LiteralPath $file -Value $projectText -Encoding utf8
-
-          [xml]$projectCheck = Get-Content -LiteralPath $file -Raw
-
-          $assemblyCheck = $projectCheck.SelectSingleNode(
-            "//*[local-name()='AssemblyName']"
-          )
-
-          $rootCheck = $projectCheck.SelectSingleNode(
-            "//*[local-name()='RootNamespace']"
-          )
-
-          if ($null -eq $assemblyCheck -or $assemblyCheck.InnerText -ne "Waterstrap") {
-            throw "AssemblyName validation failed."
-          }
-
-          if ($null -eq $rootCheck -or $rootCheck.InnerText -ne "Bloxstrap") {
-            throw "RootNamespace validation failed. WPF resource namespaces must stay Bloxstrap."
-          }
-
-      - name: Install .NET SDK
+      - name: Install .NET 10 SDK
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "6.0.428"
+          dotnet-version: "10.0.x"
 
-      - name: Restore dependencies
-        shell: pwsh
+      - name: Publish WaterStrap for macOS
+        shell: bash
         run: |
-          $ErrorActionPreference = "Stop"
+          set -euo pipefail
+          dotnet publish WaterStrap.Mac/WaterStrap.Mac.csproj \
+            --configuration Release \
+            --runtime "${{ matrix.rid }}" \
+            --self-contained true \
+            -p:UseAppHost=true \
+            --output "$RUNNER_TEMP/publish/${{ matrix.rid }}"
 
-          dotnet restore upstream/Bloxstrap/Bloxstrap.csproj `
-            --runtime win-x64 `
-            -p:EnableWindowsTargeting=true `
-            -p:SelfContained=true
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Dependency restore failed."
-          }
-
-      - name: Publish Waterstrap
-        shell: pwsh
+      - name: Package app bundle and disk image
+        shell: bash
         run: |
-          $ErrorActionPreference = "Stop"
+          set -euo pipefail
+          RID="${{ matrix.rid }}"
+          PUBLISH="$RUNNER_TEMP/publish/$RID"
+          APP="$RUNNER_TEMP/WaterStrap.app"
+          DMG_ROOT="$RUNNER_TEMP/dmg-root"
+          DMG="$RUNNER_TEMP/WaterStrap-macOS-$RID.dmg"
 
-          dotnet publish upstream/Bloxstrap/Bloxstrap.csproj `
-            --configuration Release `
-            --runtime win-x64 `
-            --self-contained true `
-            --no-restore `
-            -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:EnableWindowsTargeting=true `
-            -p:DebugType=None `
-            -p:DebugSymbols=false `
-            --output published/Waterstrap
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Publish failed. Read the compiler error above this message."
+          test -x "$PUBLISH/WaterStrap" || {
+            echo "Expected WaterStrap app host was not produced." >&2
+            ls -la "$PUBLISH" || true
+            exit 1
           }
 
-      - name: Verify the executable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $exe = "published/Waterstrap/Waterstrap.exe"
+          rm -rf "$APP" "$DMG_ROOT" "$DMG"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$DMG_ROOT"
+          cp -R "$PUBLISH/." "$APP/Contents/MacOS/"
+          chmod +x "$APP/Contents/MacOS/WaterStrap"
 
-          if (-not (Test-Path -LiteralPath $exe)) {
-            Write-Host "Publish directory contents:"
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key><string>WaterStrap</string>
+            <key>CFBundleIdentifier</key><string>io.github.acepilot982collab.waterstrap</string>
+            <key>CFBundleName</key><string>WaterStrap</string>
+            <key>CFBundleDisplayName</key><string>WaterStrap</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>${GITHUB_RUN_NUMBER}</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
 
-            Get-ChildItem -LiteralPath "published/Waterstrap" -Recurse -ErrorAction SilentlyContinue |
-              Select-Object FullName, Length |
-              Format-Table -AutoSize
+          cp -R "$APP" "$DMG_ROOT/WaterStrap.app"
+          ln -s /Applications "$DMG_ROOT/Applications"
+          hdiutil create -volname "WaterStrap" -srcfolder "$DMG_ROOT" -ov -format UDZO "$DMG"
+          test -s "$DMG"
+          echo "Created $DMG"
 
-            throw "Waterstrap.exe was not produced."
-          }
-
-          $file = Get-Item -LiteralPath $exe
-
-          if ($file.Length -lt 1000000) {
-            throw "Waterstrap.exe is unexpectedly small; check the publish output."
-          }
-
-          if (-not (Test-Path -LiteralPath "upstream/LICENSE")) {
-            throw "The upstream license file is missing."
-          }
-
-          Write-Host "Build succeeded: $($file.FullName)"
-          Write-Host "Executable size: $([math]::Round($file.Length / 1MB, 2)) MB"
-
-      - name: Upload Windows executable artifact
+      - name: Upload architecture-specific DMG
         uses: actions/upload-artifact@v4
         with:
-          name: Waterstrap-Windows-x64
-          path: published/Waterstrap/Waterstrap.exe
+          name: WaterStrap-macOS-${{ matrix.rid }}-DMG
+          path: ${{ runner.temp }}/WaterStrap-macOS-${{ matrix.rid }}.dmg
           if-no-files-found: error
           retention-days: 30
 
-      - name: Create GitHub release
-        if: github.event_name == 'workflow_dispatch'
+  publish-release:
+    name: Publish downloadable DMGs
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download both DMGs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: WaterStrap-macOS-*-DMG
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create pre-release with DMG files
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: waterstrap-${{ github.run_number }}-${{ github.run_attempt }}
-          name: Waterstrap Build ${{ github.run_number }} (attempt ${{ github.run_attempt }})
-          body: |
-            Unofficial Waterstrap Windows x64 build based on Bloxstrap.
-            Pinned upstream commit: ${{ env.UPSTREAM_COMMIT }}
-
-            This community build is not affiliated with Roblox or the original Bloxstrap maintainers.
-            The upstream license is included with this release.
-          files: |
-            published/Waterstrap/Waterstrap.exe
-            upstream/LICENSE
-          fail_on_unmatched_files: true
+          tag_name: waterstrap-macos-${{ github.run_number }}
+          name: WaterStrap macOS Preview ${{ github.run_number }}
+          prerelease: true
+          make_latest: false
           generate_release_notes: false
+          body: |
+            WaterStrap macOS Preview build.
+
+            Includes separate disk images for Apple Silicon (osx-arm64) and Intel (osx-x64) Macs.
+            This is an unsigned preview build. macOS may warn before opening it.
+            This edition currently provides the launcher UI, Roblox website launch flow, and local recent-game list. It is not feature-equivalent to the Windows WPF bootstrapper yet.
+            Not affiliated with Roblox Corporation or Bloxstrap maintainers.
+          files: release-assets/*.dmg
