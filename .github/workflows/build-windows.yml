@@ -1,0 +1,68 @@
+name: Build Waterstrap from official Bloxstrap source
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-waterstrap.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out Waterstrap build configuration
+        uses: actions/checkout@v4
+
+      - name: Get the official Bloxstrap source and submodules
+        shell: pwsh
+        run: |
+          git clone --recurse-submodules https://github.com/bloxstraplabs/bloxstrap.git upstream
+          if ($LASTEXITCODE -ne 0) { throw "Could not clone official Bloxstrap source." }
+
+      - name: Apply Waterstrap application identity
+        shell: pwsh
+        run: |
+          $path = "upstream/Bloxstrap/App.xaml.cs"
+          $source = Get-Content $path -Raw
+          $source = $source.Replace('public const string ProjectName = "Bloxstrap";', 'public const string ProjectName = "Waterstrap";')
+          $source = $source.Replace('public const string ProjectOwner = "Bloxstrap";', 'public const string ProjectOwner = "Waterstrap";')
+          $source = $source.Replace('public const string ProjectRepository = "bloxstraplabs/bloxstrap";', 'public const string ProjectRepository = "acepilot982-collab/NovaStraps";')
+          $source = $source.Replace('public const string ProjectDownloadLink = "https://bloxstraplabs.com";', 'public const string ProjectDownloadLink = "https://github.com/acepilot982-collab/NovaStraps/releases";')
+          Set-Content -Path $path -Value $source -Encoding utf8
+          if (-not (Select-String -Path $path -Pattern 'ProjectName = "Waterstrap"' -Quiet)) { throw "Waterstrap name patch did not apply." }
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 6.0.x
+
+      - name: Build Waterstrap x64 executable
+        shell: pwsh
+        run: |
+          dotnet publish upstream/Bloxstrap/Bloxstrap.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableWindowsTargeting=true -p:AssemblyName=Waterstrap --output published/Waterstrap
+          if ($LASTEXITCODE -ne 0) { throw "Waterstrap build failed." }
+          if (-not (Test-Path "published/Waterstrap/Waterstrap.exe")) { throw "Waterstrap.exe was not produced." }
+
+      - name: Upload Waterstrap.exe build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Waterstrap-Windows-x64
+          path: published/Waterstrap/Waterstrap.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish Waterstrap.exe to a GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: waterstrap-build-${{ github.run_id }}
+          name: Waterstrap Build ${{ github.run_number }}
+          body: |
+            Waterstrap is an unofficial community build based on the open-source Bloxstrap project.
+            Original project and license notices are retained in the source checkout. This build is not affiliated with or endorsed by Bloxstrap Labs or Roblox.
+            This is an automated, unsigned development build. Review the source and build log before running it.
+          files: published/Waterstrap/Waterstrap.exe
+          make_latest: true
+          generate_release_notes: false
