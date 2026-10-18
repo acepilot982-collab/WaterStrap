@@ -1,0 +1,142 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="WaterStrap.Mac.MainWindow"
+        Title="WaterStrap"
+        Width="1060"
+        Height="720"
+        MinWidth="760"
+        MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="#0B0D12">
+  <Window.Styles>
+    <Style Selector="Button.nav">
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Background" Value="#171A25" />
+      <Setter Property="Foreground" Value="#E8EAF3" />
+      <Setter Property="Padding" Value="14,11" />
+      <Setter Property="Margin" Value="0,2,0,2" />
+    </Style>
+    <Style Selector="Button.primary">
+      <Setter Property="Background" Value="#8B78FF" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Padding" Value="18,12" />
+    </Style>
+    <Style Selector="Button.secondary">
+      <Setter Property="Background" Value="#202433" />
+      <Setter Property="Foreground" Value="#E8EAF3" />
+      <Setter Property="Padding" Value="16,11" />
+    </Style>
+    <Style Selector="TextBox">
+      <Setter Property="Padding" Value="14,12" />
+      <Setter Property="Background" Value="#10131D" />
+      <Setter Property="Foreground" Value="#F4F5FA" />
+      <Setter Property="BorderBrush" Value="#31364A" />
+    </Style>
+  </Window.Styles>
+
+  <Grid ColumnDefinitions="220,*">
+    <Border Grid.Column="0" Background="#10121A" BorderBrush="#25293A" BorderThickness="0,0,1,0">
+      <Grid RowDefinitions="Auto,*,Auto" Margin="16,20">
+        <StackPanel Orientation="Horizontal" Spacing="10" Margin="2,2,0,26">
+          <Border Width="40" Height="40" CornerRadius="12" Background="#8B78FF" VerticalAlignment="Center">
+            <TextBlock Text="W" FontSize="23" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel VerticalAlignment="Center" Spacing="1">
+            <TextBlock Text="WaterStrap" FontSize="18" FontWeight="Bold" Foreground="#F5F5FB" />
+            <TextBlock Text="MACOS EDITION" FontSize="10" CharacterSpacing="1.5" Foreground="#9B91F8" />
+          </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Spacing="6">
+          <TextBlock Text="WORKSPACE" FontSize="10" CharacterSpacing="1.6" Foreground="#747B91" Margin="10,0,0,8" />
+          <Button Classes="nav" Click="FocusLaunch_Click">⌁   Game launcher</Button>
+          <Button Classes="nav" Click="OpenRoblox_Click">↗   Roblox website</Button>
+          <Button Classes="nav" Click="OpenDownload_Click">↓   Get Roblox for Mac</Button>
+          <Button Classes="nav" Click="OpenRepository_Click">⌘   Project source</Button>
+        </StackPanel>
+
+        <Border Grid.Row="2" Background="#191B28" BorderBrush="#2B3042" BorderThickness="1" CornerRadius="12" Padding="12">
+          <StackPanel Spacing="5">
+            <TextBlock Text="MAC PREVIEW" FontSize="10" CharacterSpacing="1.5" FontWeight="Bold" Foreground="#A99DFF" />
+            <TextBlock Text="A native launcher shell. Windows bootstrapper features are not part of this preview." TextWrapping="Wrap" FontSize="11" Foreground="#A5ABC0" />
+          </StackPanel>
+        </Border>
+      </Grid>
+    </Border>
+
+    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="30,28" Spacing="20">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Spacing="7">
+            <TextBlock Text="Welcome to WaterStrap" FontSize="30" FontWeight="Bold" Foreground="#F3F4FB" />
+            <TextBlock Text="A clean launch point for Roblox on your Mac." FontSize="14" Foreground="#9DA4B9" />
+          </StackPanel>
+          <Border Grid.Column="1" VerticalAlignment="Top" Background="#1B1E2A" BorderBrush="#34394D" BorderThickness="1" CornerRadius="10" Padding="12,7">
+            <StackPanel Orientation="Horizontal" Spacing="7">
+              <Ellipse Width="7" Height="7" Fill="#F3C969" VerticalAlignment="Center" />
+              <TextBlock Text="EARLY ACCESS" FontSize="10" FontWeight="Bold" CharacterSpacing="1" Foreground="#E6D9B5" />
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <Border Background="#141722" BorderBrush="#292D40" BorderThickness="1" CornerRadius="18" Padding="22">
+          <StackPanel Spacing="16">
+            <StackPanel Spacing="5">
+              <TextBlock Text="Quick launch" FontSize="20" FontWeight="SemiBold" Foreground="#F3F4FB" />
+              <TextBlock Text="Enter a Roblox place ID or a link to an experience." FontSize="12" Foreground="#939BB2" />
+            </StackPanel>
+            <TextBox x:Name="PlaceIdBox" Watermark="Place ID or https://www.roblox.com/games/..." />
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <Button Classes="primary" Click="LaunchGame_Click">Open experience</Button>
+              <Button Classes="secondary" Click="OpenRoblox_Click">Open Roblox home</Button>
+            </StackPanel>
+            <Border Background="#10131D" CornerRadius="10" Padding="12">
+              <StackPanel Orientation="Horizontal" Spacing="10">
+                <Ellipse Width="8" Height="8" Fill="#8B78FF" VerticalAlignment="Center" />
+                <TextBlock x:Name="StatusText" Text="Ready. Roblox opens through its official website and client flow." TextWrapping="Wrap" FontSize="12" Foreground="#B1B7CA" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Border>
+
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+          <Border Background="#141722" BorderBrush="#292D40" BorderThickness="1" CornerRadius="16" Padding="18">
+            <StackPanel Spacing="9">
+              <TextBlock Text="Your recent experiences" FontSize="17" FontWeight="SemiBold" Foreground="#F3F4FB" />
+              <TextBlock Text="Recently opened game IDs appear here on this Mac." FontSize="12" Foreground="#929AB0" TextWrapping="Wrap" />
+              <ItemsControl x:Name="RecentGamesList">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Border Background="#1B1F2D" CornerRadius="10" Padding="10" Margin="0,5,0,0">
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <StackPanel Spacing="2">
+                          <TextBlock Text="{Binding Title}" Foreground="#E7E9F4" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding PlaceId}" Foreground="#8992AB" FontSize="11" />
+                        </StackPanel>
+                        <Button Grid.Column="1" Classes="secondary" Padding="10,6" Tag="{Binding PlaceId}" Click="RecentGame_Click">Launch</Button>
+                      </Grid>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <Border Grid.Column="1" Background="#141722" BorderBrush="#292D40" BorderThickness="1" CornerRadius="16" Padding="18">
+            <StackPanel Spacing="10">
+              <TextBlock Text="Mac edition status" FontSize="17" FontWeight="SemiBold" Foreground="#F3F4FB" />
+              <TextBlock Text="This is a separate macOS launcher, not the Windows executable running through emulation." Foreground="#A0A7BB" FontSize="12" TextWrapping="Wrap" />
+              <TextBlock Text="Available in this preview" FontWeight="SemiBold" Foreground="#D4D8E8" Margin="0,5,0,0" />
+              <TextBlock Text="• Open Roblox website\n• Open a game by place ID or URL\n• Keep a local recent-games list" Foreground="#9DA4B9" FontSize="12" TextWrapping="Wrap" LineHeight="21" />
+              <TextBlock Text="Not yet ported" FontWeight="SemiBold" Foreground="#D4D8E8" Margin="0,5,0,0" />
+              <TextBlock Text="Windows installer/updater, Windows registry integration, Windows-specific mods, and FastFlag management." Foreground="#9DA4B9" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <TextBlock Text="Unofficial community project · Not affiliated with Roblox Corporation or Bloxstrap maintainers." FontSize="10" Foreground="#687086" TextWrapping="Wrap" />
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</Window>
